@@ -7,7 +7,7 @@ the idea is that there is a method that converts html files into docx
 but also have api methods that let user have more control e.g. so they
 can nest calls to something like 'convert_chunk' in loops
 
-user can pass existing document object as arg 
+user can pass existing document object as arg
 (if they want to manage rest of document themselves)
 
 How to deal with block level style applied over table elements? e.g. text align
@@ -44,7 +44,7 @@ def get_filename_from_url(url):
 
 def is_url(url):
     """
-    Not to be used for actually validating a url, but in our use case we only 
+    Not to be used for actually validating a url, but in our use case we only
     care if it's a url or a file path, and they're pretty distinguishable
     """
     parts = urlparse(url)
@@ -52,7 +52,7 @@ def is_url(url):
 
 def fetch_image(url):
     """
-    Attempts to fetch an image from a url. 
+    Attempts to fetch an image from a url.
     If successful returns a bytes object, else returns None
 
     :return:
@@ -230,7 +230,7 @@ class HtmlToDocx(HTMLParser):
         if 'color' in style:
             if 'rgb' in style['color']:
                 color = re.sub(r'[a-z()]+', '', style['color'])
-                colors = [int(x) for x in color.split(',')]
+                colors = [int(x) for x in color.split(',')[:3]]
             elif '#' in style['color']:
                 color = style['color'].lstrip('#')
                 colors = tuple(int(color[i:i+2], 16) for i in (0, 2, 4))
@@ -239,7 +239,7 @@ class HtmlToDocx(HTMLParser):
                 # TODO map colors to named colors (and extended colors...)
                 # For now set color to black to prevent crashing
             self.run.font.color.rgb = RGBColor(*colors)
-            
+
         if 'background-color' in style:
             if 'rgb' in style['background-color']:
                 color = color = re.sub(r'[a-z()]+', '', style['background-color'])
@@ -280,7 +280,7 @@ class HtmlToDocx(HTMLParser):
         else:
             list_style = styles['LIST_BULLET']
 
-        self.paragraph = self.doc.add_paragraph(style=list_style)            
+        self.paragraph = self.doc.add_paragraph(style=list_style)
         self.paragraph.paragraph_format.left_indent = Inches(min(list_depth * LIST_INDENT, MAX_INDENT))
         self.paragraph.paragraph_format.line_spacing = 1
 
@@ -309,7 +309,13 @@ class HtmlToDocx(HTMLParser):
         if image:
             try:
                 if isinstance(self.doc, docx.document.Document):
-                    self.doc.add_picture(image)
+                    width = current_attrs.get('width')
+                    height = current_attrs.get('height')
+                    self.doc.add_picture(
+                        image_path_or_stream=image,
+                        width=Inches(int(width) / 72) if width else None,  # 72 is the default dpi
+                        height=Inches(int(height) / 72) if height else None
+                    )
                 else:
                     self.add_image_to_cell(self.doc, image)
             except FileNotFoundError:
@@ -346,16 +352,29 @@ class HtmlToDocx(HTMLParser):
             cols = self.get_table_columns(row)
             cell_col = 0
             for col in cols:
+                colspan = int(col.attrs.get('colspan', 1))
+                rowspan = int(col.attrs.get('rowspan', 1))
+
                 cell_html = self.get_cell_html(col)
                 if col.name == 'th':
                     cell_html = "<b>%s</b>" % cell_html
+
                 docx_cell = self.table.cell(cell_row, cell_col)
+                while docx_cell.text != '':  # Skip the merged cell
+                    cell_col += 1
+                    docx_cell = self.table.cell(cell_row, cell_col)
+
+                cell_to_merge = self.table.cell(cell_row + rowspan - 1, cell_col + colspan - 1)
+                if docx_cell != cell_to_merge:
+                    docx_cell.merge(cell_to_merge)
+
                 child_parser = HtmlToDocx()
                 child_parser.copy_settings_from(self)
-                child_parser.add_html_to_cell(cell_html, docx_cell)
-                cell_col += 1
+                child_parser.add_html_to_cell(cell_html or ' ', docx_cell)  # occupy the position
+
+                cell_col += colspan
             cell_row += 1
-        
+
         # skip all tags until corresponding closing tag
         self.instances_to_skip = len(table_soup.find_all('table'))
         self.skip_tag = 'table'
@@ -581,14 +600,20 @@ class HtmlToDocx(HTMLParser):
         # Thus the row dimensions and column dimensions are assumed to be 0
 
         cols = self.get_table_columns(rows[0]) if rows else []
-        return len(rows), len(cols)
+        # Add colspan calculation column number
+        col_count = 0
+        for col in cols:
+            colspan = col.attrs.get('colspan', 1)
+            col_count += int(colspan)
+
+        return len(rows), col_count
 
     def get_tables(self):
         if not hasattr(self, 'soup'):
             self.include_tables = False
             return
             # find other way to do it, or require this dependency?
-        self.tables = self.ignore_nested_tables(self.soup.find_all('table'))  
+        self.tables = self.ignore_nested_tables(self.soup.find_all('table'))
         self.table_no = 0
 
     def run_process(self, html):
@@ -597,15 +622,19 @@ class HtmlToDocx(HTMLParser):
             html = str(self.soup)
         if self.include_tables:
             self.get_tables()
+
         self.feed(html)
+
 
     def add_html_to_document(self, html, document):
         if not isinstance(html, str):
             raise ValueError('First argument needs to be a %s' % str)
         elif not isinstance(document, docx.document.Document) and not isinstance(document, docx.table._Cell):
             raise ValueError('Second argument needs to be a %s' % docx.document.Document)
+
         self.set_initial_attrs(document)
         self.run_process(html)
+
 
     def add_html_to_cell(self, html, cell):
         if not isinstance(cell, docx.table._Cell):
@@ -618,7 +647,7 @@ class HtmlToDocx(HTMLParser):
         # cells must end with a paragraph or will get message about corrupt file
         # https://stackoverflow.com/a/29287121
         if not self.doc.paragraphs:
-            self.doc.add_paragraph('')  
+            self.doc.add_paragraph('')
 
     def parse_html_file(self, filename_html, filename_docx=None):
         with open(filename_html, 'r') as infile:
@@ -629,23 +658,23 @@ class HtmlToDocx(HTMLParser):
             path, filename = os.path.split(filename_html)
             filename_docx = '%s/new_docx_file_%s' % (path, filename)
         self.doc.save('%s.docx' % filename_docx)
-    
+
     def parse_html_string(self, html):
         self.set_initial_attrs()
         self.run_process(html)
         return self.doc
 
 if __name__=='__main__':
-    
+
     arg_parser = argparse.ArgumentParser(description='Convert .html file into .docx file with formatting')
     arg_parser.add_argument('filename_html', help='The .html file to be parsed')
     arg_parser.add_argument(
-        'filename_docx', 
-        nargs='?', 
-        help='The name of the .docx file to be saved. Default new_docx_file_[filename_html]', 
+        'filename_docx',
+        nargs='?',
+        help='The name of the .docx file to be saved. Default new_docx_file_[filename_html]',
         default=None
     )
-    arg_parser.add_argument('--bs', action='store_true', 
+    arg_parser.add_argument('--bs', action='store_true',
         help='Attempt to fix html before parsing. Requires bs4. Default True')
 
     args = vars(arg_parser.parse_args())
