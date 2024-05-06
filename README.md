@@ -1,7 +1,10 @@
 # htmldocx
-Convert html to docx
+Convert html to docx for export features namely the export tables with merge cells
 
 Dependencies: `python-docx` & `bs4`
+
+### Valispace version
+There was a need to create a fork from this project for us to be able to fix an issue regarding the export of html tables with merge cells. To do that we used the code from an open [pull request](https://github.com/pqzx/html2docx/pull/45) in the main project. Once that PR is merged we can start using the main project again.
 
 ### To install
 
